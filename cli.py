@@ -92,8 +92,12 @@ def print_ingestion_summary(result, current_path: str, elapsed: float):
     print(f"[*] [Time Consumed]: {time_str}{speed_str} [{mode_badge}]")
 
 
-def check_ollama_available(host: str = "http://localhost:11434") -> bool:
+def check_ollama_available(host: str = None) -> bool:
     """Checks if local Ollama server is running and accessible."""
+    if not host:
+        host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+        if not host.startswith("http"):
+            host = f"http://{host}"
     try:
         resp = requests.get(f"{host.rstrip('/')}/api/tags", timeout=3)
         return resp.status_code == 200
@@ -849,7 +853,8 @@ def create_components(backend_choice: str):
             print("[*] Backend: Ollama AI (qwen2.5-coder + nomic-embed-text)")
             return OllamaEmbedder(), OllamaLLM(), "ollama"
         else:
-            print("[!] Ollama server not detected at http://localhost:11434.")
+            host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+            print(f"[!] Ollama server not detected at {host}.")
             print("[*] Automatically falling back to offline TF-IDF mode.")
             return TfidfEmbedder(), None, "tfidf"
     else:

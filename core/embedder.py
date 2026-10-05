@@ -61,9 +61,12 @@ class BaseEmbedder(ABC):
 
 
 class OllamaEmbedder(BaseEmbedder):
-    def __init__(self, model: str = "nomic-embed-text", host: str = "http://localhost:11434", cache_dir: str = ".storage"):
+    def __init__(self, model: str = "nomic-embed-text", host: str = None, cache_dir: str = ".storage"):
         self.model = model
-        self.host = host.rstrip("/")
+        env_host = os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
+        if not env_host.startswith("http"):
+            env_host = f"http://{env_host}"
+        self.host = (host or env_host).rstrip("/")
         self.dim = 768  # nomic-embed-text output size
         self.cache_dir = cache_dir
         # Fix 1: Hot in-memory layer — avoids Ollama HTTP round-trip on repeated queries
