@@ -94,12 +94,11 @@ def print_ingestion_summary(result, current_path: str, elapsed: float):
 
 def check_ollama_available(host: str = None) -> bool:
     """Checks if local Ollama server is running and accessible."""
-    if not host:
-        host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-        if not host.startswith("http"):
-            host = f"http://{host}"
+    final_host = host or os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
+    if not final_host.startswith("http"):
+        final_host = f"http://{final_host}"
     try:
-        resp = requests.get(f"{host.rstrip('/')}/api/tags", timeout=3)
+        resp = requests.get(f"{final_host.rstrip('/')}/api/tags", timeout=3)
         return resp.status_code == 200
     except Exception:
         return False

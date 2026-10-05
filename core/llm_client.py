@@ -9,11 +9,11 @@ class OllamaLLM:
     def __init__(self, model: str = "qwen2.5-coder", host: str = None):
         self.model = model
         
-        env_host = os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
-        if not env_host.startswith("http"):
-            env_host = f"http://{env_host}"
+        final_host = host or os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
+        if not final_host.startswith("http"):
+            final_host = f"http://{final_host}"
             
-        self.host = (host or env_host).rstrip("/")
+        self.host = final_host.rstrip("/")
 
     def set_model(self, model: str):
         """Dynamically switches active Ollama LLM model."""
