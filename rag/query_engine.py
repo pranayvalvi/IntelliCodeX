@@ -271,6 +271,9 @@ class QueryEngine:
         lexical_index: Optional[BM25Index] = None,
         hybrid_search: bool = True,
         rrf_k: int = 60,
+        alpha: float = 0.4,
+        beta: float = 0.3,
+        gamma: float = 0.3,
     ):
         self.store = store
         self.embedder = embedder
@@ -282,6 +285,9 @@ class QueryEngine:
         self.system_prompt = PERSONAS["general"]
         self.hybrid_search = hybrid_search
         self.rrf_k = rrf_k
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
 
         if lexical_index is not None:
             self.lexical_index = lexical_index
@@ -289,6 +295,18 @@ class QueryEngine:
             self.lexical_index = BM25Index(store.chunks)
         else:
             self.lexical_index = None
+
+        from core.candidate_retrieval import CandidateRetrieval
+        from core.hybrid_ranking import HybridRanking
+        
+        self.retrieval = CandidateRetrieval(
+            store=self.store,
+            embedder=self.embedder,
+            lexical_index=self.lexical_index,
+            dependency_graph=self.dep_graph,
+            call_graph=self.call_graph
+        )
+        self.ranking = HybridRanking(alpha=self.alpha, beta=self.beta, gamma=self.gamma)
 
     def toggle_hybrid(self, enabled: Optional[bool] = None) -> bool:
         """Toggles or explicitly sets the active hybrid search state."""
@@ -320,16 +338,9 @@ class QueryEngine:
         """Retrieves top-K matches using Hybrid Search (RRF) or pure Dense Vector Search."""
         if self.hybrid_search and self.lexical_index is not None and len(self.lexical_index) > 0:
             candidate_k = max(top_k * 4, 20)
-            query_vec = self.embedder.embed([query])[0]
-            dense_results = self.store.search(query_vec, top_k=candidate_k)
-            bm25_results = self.lexical_index.search(query, top_k=candidate_k)
-            return reciprocal_rank_fusion(
-                [dense_results, bm25_results],
-                list_names=["Dense", "BM25"],
-                k=self.rrf_k,
-                top_k=top_k,
-                include_reason=False,
-            )
+            cset = self.retrieval.retrieve(query, top_k=candidate_k)
+            ranked = self.ranking.rank_weighted(cset, top_k=top_k)
+            return [(r.chunk, r.final_score) for r in ranked]
         else:
             query_vec = self.embedder.embed([query])[0]
             return self.store.search(query_vec, top_k=top_k)
@@ -338,16 +349,22 @@ class QueryEngine:
         """Retrieves top-K matches with reason annotations for context expansion."""
         if self.hybrid_search and self.lexical_index is not None and len(self.lexical_index) > 0:
             candidate_k = max(top_k * 4, 20)
-            query_vec = self.embedder.embed([query])[0]
-            dense_results = self.store.search(query_vec, top_k=candidate_k)
-            bm25_results = self.lexical_index.search(query, top_k=candidate_k)
-            return reciprocal_rank_fusion(
-                [dense_results, bm25_results],
-                list_names=["Dense", "BM25"],
-                k=self.rrf_k,
-                top_k=top_k,
-                include_reason=True,
-            )
+            cset = self.retrieval.retrieve(query, top_k=candidate_k)
+            ranked = self.ranking.rank_weighted(cset, top_k=top_k)
+            
+            out = []
+            for r in ranked:
+                sources = r.evidence_sources
+                if len(sources) > 1:
+                    reason = f"Hybrid ({' + '.join([s.title() for s in sources])} Match)"
+                elif "lexical" in sources:
+                    reason = "BM25 Lexical Match"
+                elif "semantic" in sources:
+                    reason = "Direct Vector Match"
+                else:
+                    reason = "Structural Match"
+                out.append((r.chunk, r.final_score, reason))
+            return out
         else:
             query_vec = self.embedder.embed([query])[0]
             dense_results = self.store.search(query_vec, top_k=top_k)

@@ -19,6 +19,9 @@ if repo_root not in sys.path:
 from core.vectorstore import FaissVectorStore
 from core.embedder import BaseEmbedder
 from core.chunker import CodeChunk
+from core.lexical_index import BM25Index
+from core.candidate_retrieval import CandidateRetrieval
+from core.hybrid_ranking import HybridRanking, RankedCandidate
 
 
 def calculate_ochiai_score(ef: int, ep: int, nf: int, np: int) -> float:
@@ -203,8 +206,8 @@ class StackTraceParser:
 class BugLocalizer:
     """
     Multi-signal Bug Localization Engine.
-    Combines stack trace line matching, vector similarity search, dependency graph centrality,
-    and Spectrum-Based Fault Localization (Ochiai scoring).
+    Combines stack trace line matching, candidate retrieval, hybrid ranking,
+    dependency graph centrality, and Spectrum-Based Fault Localization (Ochiai scoring).
     """
 
     STACK_FRAME_BOOST = 0.35
@@ -216,22 +219,33 @@ class BugLocalizer:
         embedder: BaseEmbedder,
         graph: Optional[nx.DiGraph] = None,
         spectrum_scores: Optional[Dict[str, float]] = None,
+        lexical_index: Optional[BM25Index] = None,
     ):
         self.store = store
         self.embedder = embedder
         self.graph = graph
         self.spectrum_scores = spectrum_scores or {}
+        self.lexical_index = lexical_index
         self.parser = StackTraceParser()
+        
+        self.retrieval = CandidateRetrieval(
+            store=self.store,
+            embedder=self.embedder,
+            lexical_index=self.lexical_index,
+            dependency_graph=self.graph,
+            call_graph=self.graph
+        )
+        self.ranking = HybridRanking()
 
     def localize(self, error_report: str, top_k: int = 5) -> Dict[str, Any]:
         trace = self.parser.parse(error_report)
         parsed_frames = trace.frames
 
-        query_vec = self.embedder.embed([error_report])[0]
-        retrieved = self.store.search(query_vec, top_k=top_k * 3)
+        cset = self.retrieval.retrieve(error_report, top_k=top_k * 3)
+        ranked_candidates = self.ranking.rank_weighted(cset, top_k=top_k * 3)
 
         frame_lookup = self._build_frame_lookup(parsed_frames)
-        candidates = self._rank_candidates(retrieved, trace, frame_lookup)
+        candidates = self._rank_candidates(ranked_candidates, trace, frame_lookup)
         candidates = self._deduplicate_by_file(candidates)
         candidates.sort(key=lambda x: x["confidence_score"], reverse=True)
         top_candidates = candidates[:top_k]
@@ -286,15 +300,18 @@ class BugLocalizer:
 
     def _rank_candidates(
         self,
-        retrieved: List[Tuple],
+        ranked_candidates: List[RankedCandidate],
         trace: ParsedStackTrace,
         frame_lookup: Dict[str, StackFrame],
     ) -> List[Dict[str, Any]]:
         candidates: List[Dict[str, Any]] = []
 
-        for chunk, sim_score in retrieved:
+        for r_cand in ranked_candidates:
+            chunk = r_cand.chunk
             matched_frame = self._match_frame(chunk.file_path, frame_lookup)
-            base_score = float(sim_score)
+            
+            # The base confidence is the new Hybrid Ranking final score
+            base_score = r_cand.final_score
             confidence = base_score
 
             if matched_frame:
@@ -313,7 +330,7 @@ class BugLocalizer:
             func_name = matched_frame.function if matched_frame else chunk.name
 
             explanation = self._candidate_explanation(
-                trace, chunk, matched_frame, graph_ctx, base_score, ochiai_score
+                trace, chunk, matched_frame, graph_ctx, r_cand, ochiai_score
             )
 
             candidates.append({
@@ -321,7 +338,9 @@ class BugLocalizer:
                 "function": func_name,
                 "line_number": line_num,
                 "confidence_score": round(confidence, 3),
-                "semantic_similarity": round(base_score, 3),
+                "semantic_similarity": round(r_cand.semantic_score, 3),
+                "lexical_score": round(r_cand.lexical_score, 3),
+                "structural_score": round(r_cand.structural_score, 3),
                 "ochiai_score": round(ochiai_score, 3),
                 "explanation": explanation,
                 "snippet": chunk.code,
@@ -341,11 +360,13 @@ class BugLocalizer:
         chunk: CodeChunk,
         matched_frame: Optional[StackFrame],
         graph_ctx: Dict[str, Any],
-        base_score: float,
+        r_cand: RankedCandidate,
         ochiai_score: float,
     ) -> str:
         parts = [
-            f"Semantic match (similarity={base_score:.2f}) for {trace.error_type}",
+            f"Retrieved via hybrid ranking (sem={r_cand.semantic_score:.2f}, "
+            f"lex={r_cand.lexical_score:.2f}, str={r_cand.structural_score:.2f}) "
+            f"for {trace.error_type}"
         ]
         if trace.error_message:
             msg_preview = trace.error_message[:80]

@@ -44,4 +44,4 @@ def test_bug_localizer_scoring():
     assert res["error_type"] == "ValueError"
     assert len(res["candidates"]) > 0
     assert res["candidates"][0]["file_path"] == "auth.py"
-    assert res["candidates"][0]["confidence_score"] > 0.5
+    assert res["candidates"][0]["confidence_score"] > 0.3

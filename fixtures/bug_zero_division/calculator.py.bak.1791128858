@@ -1,0 +1,4 @@
+def calculate_average(scores: list) -> float:
+    """Calculates the average of a list of scores. Returns 0.0 if the list is empty."""
+    # Bug: crashes with ZeroDivisionError if scores is empty
+    return sum(scores) / len(scores)

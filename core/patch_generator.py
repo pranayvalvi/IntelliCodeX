@@ -77,13 +77,15 @@ class PatchEngine:
         graph: Optional[nx.DiGraph] = None,
         repo_path: Optional[str] = None,
         sandbox_runner: Optional[SandboxRunner] = None,
+        lexical_index: Optional[Any] = None,
     ):
         self.store = store
         self.embedder = embedder
         self.llm = llm
         self.graph = graph
         self.repo_path = repo_path
-        self.localizer = BugLocalizer(store, embedder, graph)
+        self.lexical_index = lexical_index
+        self.localizer = BugLocalizer(store, embedder, graph, lexical_index=lexical_index)
         self.sandbox_runner = sandbox_runner or SandboxRunner()
 
     def generate_patch(
@@ -436,8 +438,16 @@ class PatchEngine:
     def _retrieve_rag_chunks(
         self, error_report: str, target_file: str, top_k: int = 4
     ) -> List[tuple]:
-        query_vec = self.embedder.embed([error_report])[0]
-        results = self.store.search(query_vec, top_k=top_k * 2)
+        from rag.query_engine import QueryEngine
+        engine = QueryEngine(
+            store=self.store,
+            embedder=self.embedder,
+            dep_graph=self.graph,
+            call_graph=self.graph,
+            lexical_index=self.lexical_index,
+            hybrid_search=True
+        )
+        results = engine.retrieve(error_report, top_k=top_k * 2)
         same_file = [(c, s) for c, s in results if c.file_path == target_file]
         other = [(c, s) for c, s in results if c.file_path != target_file]
         return (same_file + other)[:top_k]

@@ -1,0 +1,15 @@
+from models import Product
+
+class ShoppingCart:
+    def __init__(self):
+        self.items = [] 
+
+    def add_item(self, product: Product, quantity: int):
+        # Bug 1: Just appends, instead of checking if it already exists and adding to the quantity
+        self.items.append({'product': product, 'quantity': quantity})
+
+    def get_total(self) -> float:
+        total = 0.0
+        for item in self.items:
+            total += item['product'].price * item['quantity']
+        return total

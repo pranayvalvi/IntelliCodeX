@@ -1,0 +1,8 @@
+from calculator import calculate_average
+
+def test_average_normal():
+    assert calculate_average([10, 20, 30]) == 20.0
+
+def test_average_empty():
+    # This will crash with ZeroDivisionError before the patch
+    assert calculate_average([]) == 0.0

@@ -882,6 +882,16 @@ def main():
                         help="Check status of Git background re-indexing hooks")
     parser.add_argument("--remove-hooks", action="store_true",
                         help="Uninstall Git background re-indexing hooks")
+    
+    # Experimental Hybrid Ranking Parameters (Phase 9 System Hardening)
+    parser.add_argument("--no-hybrid", action="store_true", default=False,
+                        help="Disable alpha/beta/gamma hybrid ranking and fallback to baseline RRF")
+    parser.add_argument("--alpha", type=float, default=0.4,
+                        help="Semantic weight for hybrid ranking (default: 0.4)")
+    parser.add_argument("--beta", type=float, default=0.3,
+                        help="Lexical weight for hybrid ranking (default: 0.3)")
+    parser.add_argument("--gamma", type=float, default=0.3,
+                        help="Structural weight for hybrid ranking (default: 0.3)")
     parser.add_argument("-v", "--version", action="version", version=f"IntelliCodeX CLI v{VERSION}")
     args = parser.parse_args()
 
@@ -960,7 +970,10 @@ def main():
         dep_graph=result.graph,
         call_graph=getattr(result, "call_graph", None),
         lexical_index=getattr(result, "lexical_index", None),
-        hybrid_search=True,
+        hybrid_search=not getattr(args, "no_hybrid", False),
+        alpha=getattr(args, "alpha", 0.4),
+        beta=getattr(args, "beta", 0.3),
+        gamma=getattr(args, "gamma", 0.3),
     )
 
     # Batch Query Non-Interactive Mode
@@ -983,7 +996,10 @@ def main():
             dep_graph=result.graph,
             call_graph=getattr(result, "call_graph", None),
             lexical_index=getattr(result, "lexical_index", None),
-            hybrid_search=getattr(engine, "hybrid_search", True),
+            hybrid_search=not getattr(args, "no_hybrid", False),
+            alpha=getattr(args, "alpha", 0.4),
+            beta=getattr(args, "beta", 0.3),
+            gamma=getattr(args, "gamma", 0.3),
         )
         changed_names = [os.path.basename(p) for p in changed_paths[:3]]
         diff_desc = ", ".join(changed_names) if changed_names else "files"
