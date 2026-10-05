@@ -1,0 +1,12 @@
+# Replace your_domain.com with your actual domain or cloud IP
+# If using a raw IP without a domain, Caddy will use internal HTTPS (or you can use Tailscale/HTTP).
+# To start quickly, just use HTTP on port 80 if behind a secure VPN.
+
+:80 {
+    # Reverse proxy all API traffic to the FastAPI container
+    reverse_proxy /api/* api:8000
+    
+    # Optional: proxy docs/openapi
+    reverse_proxy /docs* api:8000
+    reverse_proxy /openapi.json api:8000
+}

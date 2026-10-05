@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  # The FastAPI Backend Server
+  api:
+    build: 
+      context: ..
+      dockerfile: Dockerfile
+    container_name: intellicodex_api
+    restart: always
+    environment:
+      - SERVER_MODE=true
+      - JWT_SECRET=${JWT_SECRET:-change_this_to_a_secure_random_string}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - MONGO_URI=mongodb://mongodb:27017/intellicodex
+    depends_on:
+      - mongodb
+    # Exposing internally; Caddy will route external traffic to this
+    expose:
+      - "8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Database for Users, Projects, and Job state
+  mongodb:
+    image: mongo:6.0
+    container_name: intellicodex_mongo
+    restart: always
+    volumes:
+      - mongo_data:/data/db
+    # Intentionally NOT mapping ports to the host for security
+    expose:
+      - "27017"
+
+  # Reverse Proxy for HTTPS
+  caddy:
+    image: caddy:2-alpine
+    container_name: intellicodex_caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  mongo_data:
+  caddy_data:
+  caddy_config:
