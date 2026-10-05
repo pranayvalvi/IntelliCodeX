@@ -7,7 +7,7 @@ import re
 import ast
 from typing import List, Dict, Any, Optional
 from core.parser import SourceFile, walk_repository, detect_language
-from core.chunker import CodeChunk, _fallback_chunk
+from core.chunker import CodeChunk, _windowed_chunks
 
 
 # Extended extension map
@@ -34,7 +34,7 @@ def parse_generic_file(sf: SourceFile) -> List[CodeChunk]:
     """Pattern-based structure extractor for non-Python languages (JS, TS, Java, Go, C++, C#)."""
     lines = sf.content.splitlines()
     if not lines:
-        return [_fallback_chunk(sf)]
+        return _windowed_chunks(sf)
 
     chunks: List[CodeChunk] = []
 
@@ -75,7 +75,7 @@ def parse_generic_file(sf: SourceFile) -> List[CodeChunk]:
                 break
 
     if not symbols:
-        return [_fallback_chunk(sf)]
+        return _windowed_chunks(sf)
 
     # Pair start_line to estimated end_line
     for i in range(len(symbols)):
