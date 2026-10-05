@@ -12,7 +12,7 @@ import networkx as nx
 from core.vectorstore import FaissVectorStore
 from core.embedder import BaseEmbedder
 from core.chunker import CodeChunk
-from rag.query_engine import format_context, SYSTEM_PROMPT
+from rag.query_engine import format_context, DEFAULT_SYSTEM_PROMPT
 
 
 class QueryIntent(str, Enum):
@@ -119,7 +119,7 @@ class AssistantEngine:
             return response
 
         prompt = self._build_prompt(question, context, intent, dependency_relationships)
-        response["answer"] = self.llm.generate(prompt, system=SYSTEM_PROMPT)
+        response["answer"] = self.llm.generate(prompt, system=DEFAULT_SYSTEM_PROMPT)
         return response
 
     def _classify_intent(self, question: str) -> QueryIntent:
