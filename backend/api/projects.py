@@ -319,6 +319,22 @@ def sync_index(
         logging.getLogger(__name__).error(f"Indexing error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+    from backend.dependency_graph import EnhancedDependencyGraph
+    from backend.parser import parse_repository_files
+    source_files = parse_repository_files(server_repo_path)
+    enhanced_graph_engine = EnhancedDependencyGraph()
+    enhanced_graph = enhanced_graph_engine.build(source_files)
+    
+    graph_path = os.path.join(base_storage_path, "graphs", f"{internal_repo_id}_graph.pkl")
+    import pickle
+    try:
+        os.makedirs(os.path.dirname(graph_path), exist_ok=True)
+        with open(graph_path, "wb") as f:
+            pickle.dump(enhanced_graph, f)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to persist graph to {graph_path}: {e}")
+
     # Also update index metadata so it can be loaded
     from backend.models import IndexMetadata
     meta = IndexMetadata(
@@ -326,7 +342,7 @@ def sync_index(
         repository_id=repository_id,
         project_id=project_id,
         index_path=index_storage_path,
-        graph_path=os.path.join(base_storage_path, "graphs"),
+        graph_path=graph_path,
         index_version="1.0",
         repository_version="1.0",
         embedding_model=req.backend,

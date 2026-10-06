@@ -139,3 +139,90 @@ def test_rehydration_isolation(client, auth_headers, tmp_path):
         headers=headers_b
     )
     assert res_chat.status_code == 403
+
+def test_graph_persistence_and_rehydration(client, auth_headers, tmp_path):
+    import shutil
+    from backend.api.repos import ACTIVE_REPOS
+    from backend.database import db_manager
+    
+    # 1. Setup repo with dependencies
+    repo_path = str(tmp_path / "graph_test_repo")
+    os.makedirs(repo_path, exist_ok=True)
+    with open(os.path.join(repo_path, "a.py"), "w") as f:
+        f.write("def func_a(): pass\n")
+    with open(os.path.join(repo_path, "b.py"), "w") as f:
+        f.write("from a import func_a\ndef func_b(): func_a()\n")
+        
+    res_proj = client.post("/api/projects", json={"name": "Graph Proj"}, headers=auth_headers)
+    project_id = res_proj.json()["project_id"]
+    
+    # 2. Setup project repo
+    res_repo = client.post(
+        f"/api/projects/{project_id}/repositories",
+        json={"name": "Graph Repo", "source_path": repo_path},
+        headers=auth_headers
+    )
+    repository_id = res_repo.json()["repository_id"]
+    
+    # 3. Trigger ingest
+    res_ingest = client.post(
+        f"/api/projects/{project_id}/repositories/{repository_id}/ingest",
+        json={"backend": "tfidf", "force_reindex": True},
+        headers=auth_headers
+    )
+    assert res_ingest.status_code == 200
+    
+    # 4. Use sync_index which previously had the [Errno 21] Is a directory bug
+    repo_doc = db_manager.find_one("repositories", {"repository_id": repository_id})
+    from core.persistence import get_repo_id
+    internal_repo_id = get_repo_id(repo_doc["storage_path"])
+    server_repo_path = os.path.join(repo_doc["storage_path"], "repository", internal_repo_id)
+    os.makedirs(server_repo_path, exist_ok=True)
+    with open(os.path.join(server_repo_path, "a.py"), "w") as f:
+        f.write("def func_a(): pass\n")
+    
+    res_sync = client.post(
+        f"/api/projects/{project_id}/repositories/{repository_id}/sync/index",
+        json={"backend": "tfidf"},
+        headers=auth_headers
+    )
+    assert res_sync.status_code == 200
+    
+    # Verify the saved metadata graph_path
+    idx_doc = db_manager.find_one("indexes", {"repository_id": repository_id})
+    graph_path = idx_doc["graph_path"]
+    
+    # Assert graph_path is a file, NOT a directory!
+    assert os.path.isfile(graph_path)
+    assert not os.path.isdir(graph_path)
+    assert graph_path.endswith("_graph.pkl")
+    
+    # 5. Clear active repos and trigger rehydration
+    ACTIVE_REPOS.clear()
+    res_chat = client.post(
+        "/api/chat/ask",
+        json={"repo_id": repository_id, "project_id": project_id, "question": "test"},
+        headers=auth_headers
+    )
+    assert res_chat.status_code == 200
+    
+    # 6. Verify graph was successfully loaded from the file
+    loaded_graph = ACTIVE_REPOS[repository_id]["graph"]
+    assert loaded_graph is not None
+    assert len(loaded_graph.nodes) > 0
+    
+    # 7. Test missing/corrupted file doesn't crash loader
+    ACTIVE_REPOS.clear()
+    os.remove(graph_path) # Delete it so loader fails to load
+    
+    res_chat_fallback = client.post(
+        "/api/chat/ask",
+        json={"repo_id": repository_id, "project_id": project_id, "question": "test 2"},
+        headers=auth_headers
+    )
+    assert res_chat_fallback.status_code == 200
+    
+    # Ensure it successfully fell back to rebuilding the graph dynamically
+    fallback_graph = ACTIVE_REPOS[repository_id]["graph"]
+    assert fallback_graph is not None
+    assert len(fallback_graph.nodes) > 0
