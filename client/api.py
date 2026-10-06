@@ -78,11 +78,10 @@ class RemoteClient:
     def login(self, username: str, password: str) -> str:
         """Authenticates and sets the token. Returns the token."""
         data = {"username": username, "password": password}
-        # FastAPI OAuth2PasswordRequestForm expects form data, not JSON
         try:
             resp = self.session.post(
-                f"{self.base_url}/api/auth/token",
-                data=data,
+                f"{self.base_url}/api/auth/login",
+                json=data,
                 timeout=self.timeout
             )
             result = self._handle_response(resp)
@@ -93,7 +92,7 @@ class RemoteClient:
 
     def get_me(self) -> User:
         """Returns the currently authenticated user."""
-        result = self._request("GET", "/api/auth/users/me")
+        result = self._request("GET", "/api/auth/me")
         return User(**result)
 
     # --- Projects ---
