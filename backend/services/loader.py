@@ -56,21 +56,28 @@ def load_project_repository(repository_id: str, current_user: User, project_id: 
         # load FAISS directly since we don't have chunks inline in FAISS anymore? 
         # Wait, how does load_index work in core.persistence?
         # Actually, FaissVectorStore.load(index_path) works, but where do we get chunks?
-        from core.persistence import load_index
+        from core.persistence import load_index, get_repo_id
         db_path = os.path.join(repo_doc["storage_path"], "metadata", "metadata.db")
         storage_dir = os.path.join(repo_doc["storage_path"], "indexes")
         
-        # the repo_path param for load_index is usually the original source_path
-        local_path = repo_doc.get("source_path", repo_doc.get("local_path"))
+        # Calculate the actual server path that was used to ingest the repository
+        base_storage_path = repo_doc["storage_path"]
+        internal_repo_id = get_repo_id(base_storage_path)
+        server_repo_path = os.path.join(base_storage_path, "repository", internal_repo_id)
         
-        cached_data = load_index(local_path, db_path=db_path, storage_dir=storage_dir)
+        cached_data = load_index(server_repo_path, db_path=db_path, storage_dir=storage_dir)
         if not cached_data:
-            raise HTTPException(status_code=500, detail="Failed to load index from metadata.db.")
+            # Fallback to local_path for legacy endpoints like /ingest
+            local_path = repo_doc.get("source_path", repo_doc.get("local_path"))
+            cached_data = load_index(local_path, db_path=db_path, storage_dir=storage_dir)
+            if not cached_data:
+                raise HTTPException(status_code=500, detail="Failed to load index from metadata.db.")
+            server_repo_path = local_path # update for downstream usage
             
         meta, chunks, store = cached_data
     except Exception as e:
         logger.error(f"Failed to load project index: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load persistent index.")
+        raise HTTPException(status_code=500, detail=f"Failed to load persistent index: {e}")
         
     backend = idx_doc.get("embedding_model", settings.DEFAULT_EMBEDDER_BACKEND)
     embedder = create_embedder(backend)
@@ -80,7 +87,7 @@ def load_project_repository(repository_id: str, current_user: User, project_id: 
     from backend.parser import parse_repository_files
     import pickle
     
-    source_files = parse_repository_files(local_path) if local_path and os.path.exists(local_path) else []
+    source_files = parse_repository_files(server_repo_path) if server_repo_path and os.path.exists(server_repo_path) else []
     
     enhanced_graph = None
     graph_path = idx_doc.get("graph_path")
@@ -94,6 +101,9 @@ def load_project_repository(repository_id: str, current_user: User, project_id: 
     if not enhanced_graph:
         enhanced_graph = EnhancedDependencyGraph().build(source_files) if source_files else EnhancedDependencyGraph().build([])
     
+    from core.lexical_index import BM25Index
+    lexical_index = BM25Index(chunks)
+
     from rag.query_engine import QueryEngine
     engine = QueryEngine(store, embedder, llm)
     
@@ -105,6 +115,7 @@ def load_project_repository(repository_id: str, current_user: User, project_id: 
         "meta": repo_doc,
         "source_files": source_files,
         "embedder": embedder,
+        "lexical_index": lexical_index,
     }
     
     return ACTIVE_REPOS[repository_id]

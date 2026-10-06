@@ -188,3 +188,27 @@ class RemoteClient:
             
         result = self._request("POST", "/api/chat/ask", json=payload)
         return ChatResponse(**result)
+
+    # --- Repair / Bugs ---
+    
+    def localize_bug(self, project_id: str, repository_id: str, error_report: str, top_k: int = 5) -> Dict[str, Any]:
+        url = "/api/bugs/localize"
+        payload = {
+            "project_id": project_id,
+            "repo_id": repository_id,
+            "error_report": error_report,
+            "top_k": top_k
+        }
+        return self._request("POST", url, json=payload)
+
+    def generate_patch(self, project_id: str, repository_id: str, error_report: str, target_file: Optional[str] = None, verify_in_sandbox: bool = False) -> Dict[str, Any]:
+        url = "/api/patches/generate"
+        payload = {
+            "project_id": project_id,
+            "repo_id": repository_id,
+            "error_report": error_report,
+            "verify_in_sandbox": verify_in_sandbox
+        }
+        if target_file:
+            payload["target_file"] = target_file
+        return self._request("POST", url, json=payload)
