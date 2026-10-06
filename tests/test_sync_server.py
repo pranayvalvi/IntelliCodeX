@@ -199,3 +199,132 @@ def test_sync_upload_auth(sync_client, auth_headers):
     
     res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/upload", json={"files": []}, headers=auth_b)
     assert res.status_code == 403
+import base64
+from unittest.mock import patch
+
+def test_sync_index_basic(sync_client, auth_headers, tmp_path):
+    res_proj = sync_client.post("/api/projects", json={"name": "Idx Proj"}, headers=auth_headers)
+    project_id = res_proj.json()["project_id"]
+    res_repo = sync_client.post(f"/api/projects/{project_id}/repositories", json={"name": "Idx Repo", "source_path": "/x"}, headers=auth_headers)
+    repo_id = res_repo.json()["repository_id"]
+    
+    # 1. Initial indexing
+    # First upload some files
+    b64_a = base64.b64encode(b"def a(): pass").decode("utf-8")
+    b64_b = base64.b64encode(b"def b(): pass").decode("utf-8")
+    
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/upload", json={
+        "files": [{"path": "a.py", "content": b64_a}, {"path": "b.py", "content": b64_b}]
+    }, headers=auth_headers)
+    assert res.status_code == 200
+    
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/index", json={"backend": "tfidf"}, headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "completed"
+    assert data["files_added"] == 2
+    assert data["files_modified"] == 0
+    assert data["files_deleted"] == 0
+    assert data["files_unchanged"] == 0
+    assert data["index_updated"] == True
+    assert data["chunks_indexed"] > 0
+    
+    # 2. Unchanged files are not unnecessarily reprocessed (No changes)
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/index", json={"backend": "tfidf"}, headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["files_added"] == 0
+    assert data["files_modified"] == 0
+    assert data["files_deleted"] == 0
+    assert data["files_unchanged"] == 2
+    assert data["index_updated"] == False
+    
+    # 3. One modified file
+    b64_a2 = base64.b64encode(b"def a(): print('hi')").decode("utf-8")
+    sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/upload", json={
+        "files": [{"path": "a.py", "content": b64_a2}]
+    }, headers=auth_headers)
+    
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/index", json={"backend": "tfidf"}, headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["files_added"] == 0
+    assert data["files_modified"] == 1
+    assert data["files_unchanged"] == 1
+    assert data["index_updated"] == True
+    
+    # 4. One new file
+    b64_c = base64.b64encode(b"def c(): pass").decode("utf-8")
+    sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/upload", json={
+        "files": [{"path": "c.py", "content": b64_c}]
+    }, headers=auth_headers)
+    
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/index", json={"backend": "tfidf"}, headers=auth_headers)
+    data = res.json()
+    assert data["files_added"] == 1
+    assert data["files_modified"] == 0
+    assert data["files_unchanged"] == 2
+    assert data["index_updated"] == True
+    
+    # 5. One deleted file
+    # We can delete a file from the server storage manually to simulate sync deletion,
+    # or rely on the manifest delta. Wait, our `sync_upload` currently doesn't delete files.
+    # The `detect_repository_changes` compares the filesystem with the SQLite DB.
+    # We need a delete endpoint, or we just use os.remove directly in the test to simulate it.
+    user_res = sync_client.get("/api/auth/me", headers=auth_headers)
+    user_id = user_res.json()["id"]
+    from core.persistence import get_repo_id
+    internal_repo_id = get_repo_id(res_repo.json()["storage_path"])
+    
+    import os
+    server_c_path = os.path.join(".storage", "projects", user_id, project_id, "repository", internal_repo_id, "c.py")
+    if os.path.exists(server_c_path):
+        os.remove(server_c_path)
+        
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/index", json={"backend": "tfidf"}, headers=auth_headers)
+    data = res.json()
+    assert data["files_deleted"] == 1
+    assert data["files_unchanged"] == 2
+    assert data["index_updated"] == True
+
+@patch("core.pipeline.chunk_repository")
+def test_sync_index_performance(mock_chunk_repository, sync_client, auth_headers):
+    # Just a mock wrapper to count calls
+    def side_effect(files):
+        from core.chunker import CodeChunk
+        return [CodeChunk(chunk_id="f_0.py::func_0", file_path="f_0.py", code="dummy", language="python", start_line=1, end_line=1, kind="function", name="func_0")]
+        
+    mock_chunk_repository.side_effect = side_effect
+
+    res_proj = sync_client.post("/api/projects", json={"name": "Perf Proj"}, headers=auth_headers)
+    project_id = res_proj.json()["project_id"]
+    res_repo = sync_client.post(f"/api/projects/{project_id}/repositories", json={"name": "Perf Repo", "source_path": "/x"}, headers=auth_headers)
+    repo_id = res_repo.json()["repository_id"]
+    
+    # Upload 100 files
+    files = []
+    for i in range(100):
+        b64_content = base64.b64encode(f"def func_{i}(): pass".encode("utf-8")).decode("utf-8")
+        files.append({"path": f"f_{i}.py", "content": b64_content})
+        
+    sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/upload", json={"files": files}, headers=auth_headers)
+    
+    # 1. Initial index
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/index", json={"backend": "tfidf"}, headers=auth_headers)
+    assert res.status_code == 200
+    
+    mock_chunk_repository.reset_mock()
+    
+    # Modify 1 file
+    b64_mod = base64.b64encode(b"def func_0(): print('changed')").decode("utf-8")
+    sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/upload", json={"files": [{"path": "f_0.py", "content": b64_mod}]}, headers=auth_headers)
+    
+    # 2. Incremental index
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/index", json={"backend": "tfidf"}, headers=auth_headers)
+    assert res.status_code == 200
+    
+    # Verify chunk_repository was called with EXACTLY 1 file, not 100.
+    mock_chunk_repository.assert_called_once()
+    called_files = mock_chunk_repository.call_args[0][0]
+    assert len(called_files) == 1
+    assert called_files[0].rel_path == "f_0.py"

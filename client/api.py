@@ -160,6 +160,14 @@ class RemoteClient:
         payload = {"files": file_payloads}
         return self._request("POST", url, json=payload)
 
+    def sync_index(self, project_id: str, repository_id: str, backend: str = "tfidf") -> Dict[str, Any]:
+        """
+        Triggers an incremental re-index of the repository on the server.
+        """
+        url = f"/api/projects/{project_id}/repositories/{repository_id}/sync/index"
+        payload = {"backend": backend}
+        return self._request("POST", url, json=payload)
+
     # --- Ingestion ---
 
     def ingest_repository(self, project_id: str, repository_id: str, backend: str = "tfidf", force_reindex: bool = False) -> IndexMetadata:

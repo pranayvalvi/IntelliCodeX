@@ -73,3 +73,15 @@ class SyncUploadRequest(BaseModel):
 class SyncUploadResponse(BaseModel):
     uploaded: list[str]
     total_size: int
+
+class SyncIndexRequest(BaseModel):
+    backend: str = "tfidf"
+
+class SyncIndexResponse(BaseModel):
+    status: str
+    files_added: int
+    files_modified: int
+    files_deleted: int
+    files_unchanged: int
+    chunks_indexed: int
+    index_updated: bool

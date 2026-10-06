@@ -8,7 +8,8 @@ from backend.models import (
     Project, ProjectCreate, Repository, RepositoryCreate, 
     IndexMetadata, IndexMetadataCreate, generate_id, utc_now_str,
     SyncManifestRequest, SyncManifestResponse,
-    SyncUploadRequest, SyncUploadResponse
+    SyncUploadRequest, SyncUploadResponse,
+    SyncIndexRequest, SyncIndexResponse
 )
 from backend.config import settings
 
@@ -259,6 +260,107 @@ def sync_upload(
         uploaded_files.append(clean_path)
 
     return SyncUploadResponse(uploaded=uploaded_files, total_size=total_size)
+
+@router.post("/{project_id}/repositories/{repository_id}/sync/index", response_model=SyncIndexResponse)
+def sync_index(
+    project_id: str,
+    repository_id: str,
+    req: SyncIndexRequest,
+    current_user: User = Depends(get_current_user)
+):
+    proj_doc = db_manager.find_one("projects", {"project_id": project_id})
+    if not proj_doc:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if proj_doc["owner_user_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this project")
+
+    repo_doc = db_manager.find_one("repositories", {"repository_id": repository_id, "project_id": project_id})
+    if not repo_doc:
+        raise HTTPException(status_code=404, detail="Repository not found in this project")
+        
+    from core.persistence import get_repo_id, detect_repository_changes
+    from core.parser import walk_repository
+    
+    internal_repo_id = get_repo_id(repo_doc["storage_path"])
+    base_storage_path = repo_doc["storage_path"]
+    
+    server_repo_path = os.path.join(base_storage_path, "repository", internal_repo_id)
+    if not os.path.exists(server_repo_path):
+        raise HTTPException(status_code=400, detail=f"Server repository path '{server_repo_path}' is empty/missing. Sync files first.")
+        
+    meta_storage_path = os.path.join(base_storage_path, "metadata")
+    index_storage_path = os.path.join(base_storage_path, "indexes")
+    db_path = os.path.join(meta_storage_path, "metadata.db")
+    
+    source_files = walk_repository(server_repo_path)
+    delta = detect_repository_changes(server_repo_path, source_files, db_path=db_path)
+    
+    files_added = len(delta.added)
+    files_modified = len(delta.modified)
+    files_deleted = len(delta.deleted)
+    files_unchanged = len(delta.unchanged)
+    index_updated = delta.has_changes() or delta.is_fresh_index
+
+    from backend.services.llm_factory import create_embedder
+    from core.pipeline import ingest_repository
+    embedder = create_embedder(req.backend)
+    
+    try:
+        result = ingest_repository(
+            repo_path=server_repo_path,
+            embedder=embedder,
+            force_reindex=False,
+            save_to_disk=True,
+            db_path=db_path,
+            storage_dir=index_storage_path
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Indexing error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Also update index metadata so it can be loaded
+    from backend.models import IndexMetadata
+    meta = IndexMetadata(
+        index_id=generate_id("idx"),
+        repository_id=repository_id,
+        project_id=project_id,
+        index_path=index_storage_path,
+        graph_path=os.path.join(base_storage_path, "graphs"),
+        index_version="1.0",
+        repository_version="1.0",
+        embedding_model=req.backend,
+        chunking_version="1.0"
+    )
+    # Upsert logic (same as /ingest endpoint)
+    existing_indexes = db_manager.find("indexes", {"repository_id": repository_id, "project_id": project_id})
+    if hasattr(db_manager, "delete_many"):
+        db_manager.delete_many("indexes", {"repository_id": repository_id})
+    else:
+        if "indexes" in getattr(db_manager, "_data", {}):
+            db_manager._data["indexes"] = [doc for doc in db_manager._data["indexes"] if doc.get("repository_id") != repository_id]
+            if hasattr(db_manager, "_save"):
+                db_manager._save()
+    db_manager.insert("indexes", meta.model_dump())
+
+    # We must also clear the ACTIVE_REPOS cache for this project/repo so next RAG hit reloads the new index
+    from backend.api.chat import load_project_repository
+    # Actually ACTIVE_REPOS is managed dynamically. `backend.services.loader.clear_active_repo`?
+    # ACTIVE_REPOS is just a dict in loader. Let's try to remove it if possible.
+    import backend.services.loader as ldr
+    cache_key = f"{project_id}_{repository_id}"
+    if hasattr(ldr, "ACTIVE_REPOS") and cache_key in ldr.ACTIVE_REPOS:
+        del ldr.ACTIVE_REPOS[cache_key]
+
+    return SyncIndexResponse(
+        status="completed",
+        files_added=files_added,
+        files_modified=files_modified,
+        files_deleted=files_deleted,
+        files_unchanged=files_unchanged,
+        chunks_indexed=result.num_chunks,
+        index_updated=index_updated
+    )
 
 @router.post("/{project_id}/repositories/{repository_id}/ingest", response_model=IndexMetadata)
 def ingest_project_repository(project_id: str, repository_id: str, req: ProjectIngestRequest, current_user: User = Depends(get_current_user)):
