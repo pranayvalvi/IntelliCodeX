@@ -82,6 +82,16 @@ def test_list_repositories(mock_request, client, mock_response):
     assert repos == []
 
 @patch("requests.Session.request")
+def test_sync_manifest(mock_request, client, mock_response):
+    mock_request.return_value = mock_response(200, {
+        "need": ["a.py"], "delete": ["b.py"], "unchanged": 1
+    })
+    manifest = {"a.py": "hash"}
+    res = client.sync_manifest("p1", "r1", manifest)
+    assert res["need"] == ["a.py"]
+    assert res["unchanged"] == 1
+
+@patch("requests.Session.request")
 def test_ingest_repository(mock_request, client, mock_response):
     mock_request.return_value = mock_response(200, {
         "index_id": "i1", "repository_id": "r1", "project_id": "p1",

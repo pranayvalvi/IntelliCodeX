@@ -125,6 +125,17 @@ class RemoteClient:
         result = self._request("GET", f"/api/projects/{project_id}/repositories/{repository_id}")
         return Repository(**result)
 
+    # --- Sync ---
+    
+    def sync_manifest(self, project_id: str, repository_id: str, manifest: Dict[str, str]) -> Dict[str, Any]:
+        """
+        Sends a manifest of client files (relative_path -> sha256) to the server.
+        Returns a dictionary with 'need', 'delete', and 'unchanged' keys.
+        """
+        payload = {"files": manifest}
+        result = self._request("POST", f"/api/projects/{project_id}/repositories/{repository_id}/sync/manifest", json=payload)
+        return result
+
     # --- Ingestion ---
 
     def ingest_repository(self, project_id: str, repository_id: str, backend: str = "tfidf", force_reindex: bool = False) -> IndexMetadata:

@@ -6,7 +6,8 @@ from backend.auth import User, get_current_user
 from backend.database import db_manager
 from backend.models import (
     Project, ProjectCreate, Repository, RepositoryCreate, 
-    IndexMetadata, IndexMetadataCreate, generate_id, utc_now_str
+    IndexMetadata, IndexMetadataCreate, generate_id, utc_now_str,
+    SyncManifestRequest, SyncManifestResponse
 )
 from backend.config import settings
 
@@ -133,6 +134,70 @@ from pydantic import BaseModel
 class ProjectIngestRequest(BaseModel):
     backend: str = settings.DEFAULT_EMBEDDER_BACKEND
     force_reindex: bool = False
+
+@router.post("/{project_id}/repositories/{repository_id}/sync/manifest", response_model=SyncManifestResponse)
+def sync_manifest(
+    project_id: str,
+    repository_id: str,
+    req: SyncManifestRequest,
+    current_user: User = Depends(get_current_user)
+):
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    proj_doc = db_manager.find_one("projects", {"project_id": project_id})
+    if not proj_doc:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if proj_doc["owner_user_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this project")
+
+    repo_doc = db_manager.find_one("repositories", {"repository_id": repository_id, "project_id": project_id})
+    if not repo_doc:
+        raise HTTPException(status_code=404, detail="Repository not found in this project")
+        
+    if len(req.files) > 100000:
+        raise HTTPException(status_code=400, detail="Too many files in manifest (limit 100000)")
+        
+    clean_manifest = {}
+    for path, fhash in req.files.items():
+        if ".." in path or path.startswith("/") or ":" in path or "\0" in path:
+            raise HTTPException(status_code=400, detail=f"Invalid path in manifest: {path}")
+        clean_path = path.replace("\\", "/")
+        clean_manifest[clean_path] = fhash
+
+    from core.persistence import get_repo_id, get_db_connection, load_stored_file_hashes
+    
+    internal_repo_id = get_repo_id(repo_doc["storage_path"])
+    base_storage_path = os.path.join(".storage", "projects", current_user.id, project_id, "metadata")
+    db_path = os.path.join(base_storage_path, "metadata.db")
+    
+    server_manifest = {}
+    if os.path.exists(db_path):
+        conn = get_db_connection(db_path)
+        try:
+            server_manifest = load_stored_file_hashes(conn, internal_repo_id)
+        except Exception as e:
+            logger.error(f"Error loading server manifest for {repository_id}: {e}")
+        finally:
+            conn.close()
+            
+    need = []
+    delete = []
+    unchanged = 0
+    
+    for path, client_hash in clean_manifest.items():
+        if path not in server_manifest:
+            need.append(path)
+        elif server_manifest[path] != client_hash:
+            need.append(path)
+        else:
+            unchanged += 1
+            
+    for path in server_manifest:
+        if path not in clean_manifest:
+            delete.append(path)
+            
+    return SyncManifestResponse(need=need, delete=delete, unchanged=unchanged)
 
 @router.post("/{project_id}/repositories/{repository_id}/ingest", response_model=IndexMetadata)
 def ingest_project_repository(project_id: str, repository_id: str, req: ProjectIngestRequest, current_user: User = Depends(get_current_user)):

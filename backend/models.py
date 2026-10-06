@@ -54,3 +54,11 @@ class IndexMetadata(IndexMetadataBase):
     index_path: str
     graph_path: str
     last_indexed_at: str = Field(default_factory=utc_now_str)
+
+class SyncManifestRequest(BaseModel):
+    files: dict[str, str]  # dict[relative_path, sha256_hash]
+
+class SyncManifestResponse(BaseModel):
+    need: list[str]
+    delete: list[str]
+    unchanged: int
