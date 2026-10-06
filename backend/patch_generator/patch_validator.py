@@ -98,17 +98,58 @@ def compute_patch_quality_score(
     return round(min(0.99, max(0.05, score)), 3)
 
 
+def is_test_file(filepath: str) -> bool:
+    """Determine if a file path points to a test file."""
+    if not filepath:
+        return False
+    
+    path_parts = filepath.replace("\\", "/").split("/")
+    filename = path_parts[-1].lower()
+    
+    # Common test file patterns
+    if filename.startswith("test_") or filename.endswith("_test.py") or filename.endswith(".test.js") or filename.endswith(".spec.ts"):
+        return True
+        
+    # Common test directories
+    for part in path_parts[:-1]:
+        part_lower = part.lower()
+        if part_lower in ("test", "tests", "testing", "spec", "specs", "fixture", "fixtures"):
+            return True
+            
+    return False
+
+
+def extract_modified_files(git_diff: str) -> list[str]:
+    """Extract all modified file paths from a unified git diff."""
+    files = set()
+    for line in git_diff.splitlines():
+        if line.startswith("--- a/"):
+            files.add(line[6:].strip())
+        elif line.startswith("+++ b/"):
+            files.add(line[6:].strip())
+    return list(files)
+
 def validate_patch(
     patched_code: str,
     git_diff: str,
     language: str = "python",
     repo_path: Optional[str] = None,
     original_code: str = "",
+    target_file: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run all validation checks and return a combined report."""
     syntax_result = validate_syntax(patched_code, language)
     git_result = validate_git_apply(git_diff, repo_path)
     has_changes = patched_code.strip() != original_code.strip()
+    
+    modifies_test = False
+    if target_file and is_test_file(target_file):
+        modifies_test = True
+        
+    if git_diff:
+        for f in extract_modified_files(git_diff):
+            if is_test_file(f):
+                modifies_test = True
 
     return {
         "syntax_valid": syntax_result.get("valid", False),
@@ -117,4 +158,5 @@ def validate_patch(
         "git_apply_error": git_result.get("error"),
         "git_apply_skipped": git_result.get("skipped", False),
         "has_changes": has_changes,
+        "modifies_test_file": modifies_test,
     }

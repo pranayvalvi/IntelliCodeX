@@ -154,6 +154,7 @@ class PatchEngine:
             language=language,
             repo_path=self.repo_path,
             original_code=diff_original,
+            target_file=file_path,
         )
         confidence_score = compute_patch_quality_score(
             localization_confidence=localization_confidence,
@@ -197,7 +198,7 @@ class PatchEngine:
             },
             "llm_generated": llm_generated,
             "error_type": localization.get("error_type", "UnknownError"),
-            "status": "pending",
+            "status": "failed" if validation.get("modifies_test_file") else "pending",
             "created_at": time.time(),
         }
 
@@ -278,6 +279,31 @@ class PatchEngine:
                 full_original, snippet, current_snippet, using_full_file, top_candidate
             )
 
+            # Reject test file modifications immediately
+            from backend.patch_generator.patch_validator import is_test_file
+            if is_test_file(file_path):
+                final_test_result = SandboxTestResult(
+                    success=False,
+                    exit_code=1,
+                    stdout="",
+                    stderr=f"Security rejection: Patch modifies test file '{file_path}'. Repair attempts must not modify tests.",
+                    duration_seconds=0.0,
+                    framework="security",
+                    passed_count=0,
+                    failed_count=1
+                )
+                iteration_history.append({
+                    "turn": turn,
+                    "explanation": current_explanation,
+                    "test_passed": final_test_result.success,
+                    "skipped": final_test_result.skipped,
+                    "duration": final_test_result.duration_seconds,
+                    "failed_count": final_test_result.failed_count,
+                    "passed_count": final_test_result.passed_count,
+                    "assertion_errors": [],
+                })
+                break
+
             # Test candidate patch inside isolated sandbox
             if self.repo_path:
                 if progress_callback:
@@ -319,6 +345,7 @@ class PatchEngine:
             language=language,
             repo_path=self.repo_path,
             original_code=diff_original,
+            target_file=file_path,
         )
 
         test_passed = final_test_result.success if final_test_result else False
@@ -376,7 +403,7 @@ class PatchEngine:
             },
             "llm_generated": llm_generated,
             "error_type": localization.get("error_type", "UnknownError"),
-            "status": "verified" if (test_passed and not test_skipped) else "pending",
+            "status": "failed" if validation.get("modifies_test_file") else ("verified" if (test_passed and not test_skipped) else "pending"),
             "created_at": time.time(),
         }
 

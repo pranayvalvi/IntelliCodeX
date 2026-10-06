@@ -28,6 +28,11 @@ def mock_response():
 def client():
     return RemoteClient(base_url="http://fake-server", token="fake-token")
 
+def test_missing_url_raises_error(monkeypatch):
+    monkeypatch.delenv("INTELLICODEX_SERVER_URL", raising=False)
+    with pytest.raises(ValueError, match="INTELLICODEX_SERVER_URL is not configured"):
+        RemoteClient()
+
 @patch("requests.Session.post")
 def test_login_success(mock_post, mock_response):
     mock_post.return_value = mock_response(200, {"access_token": "new-token", "token_type": "bearer"})

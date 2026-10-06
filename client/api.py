@@ -19,7 +19,10 @@ class RemoteClient:
         Initializes the RemoteClient.
         Reads INTELLICODEX_SERVER_URL from environment if base_url is not provided.
         """
-        self.base_url = (base_url or os.environ.get("INTELLICODEX_SERVER_URL", "http://127.0.0.1:8000")).rstrip("/")
+        url = base_url or os.environ.get("INTELLICODEX_SERVER_URL")
+        if not url:
+            raise ValueError("INTELLICODEX_SERVER_URL is not configured. You must set it in your environment or explicitly pass base_url.")
+        self.base_url = url.rstrip("/")
         self.token = token
         self.timeout = timeout
         self.session = requests.Session()
@@ -55,14 +58,15 @@ class RemoteClient:
         else:
             raise RemoteAPIError(f"API Error ({response.status_code}): {error_detail}")
 
-    def _request(self, method: str, path: str, **kwargs) -> Any:
+    def _request(self, method: str, path: str, timeout: Optional[int] = None, **kwargs) -> Any:
         url = f"{self.base_url}{path}"
+        req_timeout = timeout if timeout is not None else self.timeout
         try:
             resp = self.session.request(
                 method=method,
                 url=url,
                 headers=self._get_headers(),
-                timeout=self.timeout,
+                timeout=req_timeout,
                 **kwargs
             )
             return self._handle_response(resp)
@@ -201,7 +205,7 @@ class RemoteClient:
         }
         return self._request("POST", url, json=payload)
 
-    def generate_patch(self, project_id: str, repository_id: str, error_report: str, target_file: Optional[str] = None, verify_in_sandbox: bool = False) -> Dict[str, Any]:
+    def generate_patch(self, project_id: str, repository_id: str, error_report: str, target_file: Optional[str] = None, verify_in_sandbox: bool = False, timeout: int = 300) -> Dict[str, Any]:
         url = "/api/patches/generate"
         payload = {
             "project_id": project_id,
@@ -211,4 +215,4 @@ class RemoteClient:
         }
         if target_file:
             payload["target_file"] = target_file
-        return self._request("POST", url, json=payload)
+        return self._request("POST", url, json=payload, timeout=timeout)
