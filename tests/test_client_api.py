@@ -92,6 +92,13 @@ def test_sync_manifest(mock_request, client, mock_response):
     assert res["unchanged"] == 1
 
 @patch("requests.Session.request")
+def test_upload_files(mock_request, client, mock_response, tmp_path):
+    mock_request.return_value = mock_response(200, {"uploaded": ["a.py"], "total_size": 10})
+    (tmp_path / "a.py").write_text("hello")
+    res = client.upload_files("p1", "r1", str(tmp_path), ["a.py"])
+    assert res["uploaded"] == ["a.py"]
+
+@patch("requests.Session.request")
 def test_ingest_repository(mock_request, client, mock_response):
     mock_request.return_value = mock_response(200, {
         "index_id": "i1", "repository_id": "r1", "project_id": "p1",

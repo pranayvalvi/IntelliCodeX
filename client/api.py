@@ -136,6 +136,30 @@ class RemoteClient:
         result = self._request("POST", f"/api/projects/{project_id}/repositories/{repository_id}/sync/manifest", json=payload)
         return result
 
+    def upload_files(self, project_id: str, repository_id: str, local_repo_path: str, files_to_upload: List[str]) -> Dict[str, Any]:
+        """
+        Uploads local files to the server using JSON and base64 encoding.
+        """
+        import base64
+        if not files_to_upload:
+            return {"uploaded": [], "total_size": 0}
+            
+        url = f"/api/projects/{project_id}/repositories/{repository_id}/sync/upload"
+        
+        file_payloads = []
+        for rel_path in files_to_upload:
+            abs_path = os.path.join(local_repo_path, rel_path)
+            try:
+                with open(abs_path, "rb") as f:
+                    content_bytes = f.read()
+                    b64_content = base64.b64encode(content_bytes).decode("utf-8")
+                    file_payloads.append({"path": rel_path, "content": b64_content})
+            except (OSError, IOError):
+                pass
+                
+        payload = {"files": file_payloads}
+        return self._request("POST", url, json=payload)
+
     # --- Ingestion ---
 
     def ingest_repository(self, project_id: str, repository_id: str, backend: str = "tfidf", force_reindex: bool = False) -> IndexMetadata:

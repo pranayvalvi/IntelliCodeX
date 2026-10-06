@@ -62,3 +62,14 @@ class SyncManifestResponse(BaseModel):
     need: list[str]
     delete: list[str]
     unchanged: int
+
+class FileUpload(BaseModel):
+    path: str
+    content: str # base64 encoded string
+
+class SyncUploadRequest(BaseModel):
+    files: list[FileUpload]
+
+class SyncUploadResponse(BaseModel):
+    uploaded: list[str]
+    total_size: int

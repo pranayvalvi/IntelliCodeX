@@ -7,7 +7,8 @@ from backend.database import db_manager
 from backend.models import (
     Project, ProjectCreate, Repository, RepositoryCreate, 
     IndexMetadata, IndexMetadataCreate, generate_id, utc_now_str,
-    SyncManifestRequest, SyncManifestResponse
+    SyncManifestRequest, SyncManifestResponse,
+    SyncUploadRequest, SyncUploadResponse
 )
 from backend.config import settings
 
@@ -198,6 +199,66 @@ def sync_manifest(
             delete.append(path)
             
     return SyncManifestResponse(need=need, delete=delete, unchanged=unchanged)
+
+@router.post("/{project_id}/repositories/{repository_id}/sync/upload", response_model=SyncUploadResponse)
+def sync_upload(
+    project_id: str,
+    repository_id: str,
+    req: SyncUploadRequest,
+    current_user: User = Depends(get_current_user)
+):
+    import base64
+    proj_doc = db_manager.find_one("projects", {"project_id": project_id})
+    if not proj_doc:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if proj_doc["owner_user_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this project")
+
+    repo_doc = db_manager.find_one("repositories", {"repository_id": repository_id, "project_id": project_id})
+    if not repo_doc:
+        raise HTTPException(status_code=404, detail="Repository not found in this project")
+        
+    from core.persistence import get_repo_id
+    internal_repo_id = get_repo_id(repo_doc["storage_path"])
+    
+    base_storage_path = os.path.join(repo_doc["storage_path"], "repository", internal_repo_id)
+    
+    total_size = 0
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+    MAX_TOTAL_SIZE = 100 * 1024 * 1024 # 100MB
+    uploaded_files = []
+    
+    for file in req.files:
+        path = file.path
+        if not path or ".." in path or path.startswith("/") or ":" in path or "\0" in path:
+            raise HTTPException(status_code=400, detail=f"Invalid path in upload: {path}")
+        
+        clean_path = path.replace("\\", "/")
+        dest_path = os.path.normpath(os.path.join(base_storage_path, clean_path))
+        
+        if not os.path.abspath(dest_path).startswith(os.path.abspath(base_storage_path)):
+            raise HTTPException(status_code=400, detail="Path traversal detected")
+            
+        try:
+            content_bytes = base64.b64decode(file.content)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 encoding for {path}")
+            
+        file_size = len(content_bytes)
+        total_size += file_size
+        
+        if file_size > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail=f"File {path} exceeds size limit")
+        if total_size > MAX_TOTAL_SIZE:
+            raise HTTPException(status_code=400, detail="Total upload exceeds size limit")
+            
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        with open(dest_path, "wb") as f:
+            f.write(content_bytes)
+        
+        uploaded_files.append(clean_path)
+
+    return SyncUploadResponse(uploaded=uploaded_files, total_size=total_size)
 
 @router.post("/{project_id}/repositories/{repository_id}/ingest", response_model=IndexMetadata)
 def ingest_project_repository(project_id: str, repository_id: str, req: ProjectIngestRequest, current_user: User = Depends(get_current_user)):

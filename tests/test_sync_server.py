@@ -132,3 +132,70 @@ def test_sync_manifest_cross_project(sync_client, auth_headers):
     res = sync_client.post(f"/api/projects/{project_id_b}/repositories/{repo_id_a}/sync/manifest", json={"files": {}}, headers=auth_headers)
     assert res.status_code == 403
     # User A is not owner of Proj B -> 403
+
+import base64
+
+def test_sync_upload_basic(sync_client, auth_headers, tmp_path):
+    res_proj = sync_client.post("/api/projects", json={"name": "Upload Proj"}, headers=auth_headers)
+    project_id = res_proj.json()["project_id"]
+    res_repo = sync_client.post(f"/api/projects/{project_id}/repositories", json={"name": "Upload Repo", "source_path": "/x"}, headers=auth_headers)
+    repo_id = res_repo.json()["repository_id"]
+    
+    b64_a = base64.b64encode(b"hello a").decode("utf-8")
+    b64_b = base64.b64encode(b"hello b").decode("utf-8")
+    
+    payload = {
+        "files": [
+            {"path": "a.py", "content": b64_a},
+            {"path": "b.py", "content": b64_b}
+        ]
+    }
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/upload", json=payload, headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert "a.py" in data["uploaded"]
+    assert "b.py" in data["uploaded"]
+    assert data["total_size"] == 14
+
+def test_sync_upload_security(sync_client, auth_headers, tmp_path):
+    res_proj = sync_client.post("/api/projects", json={"name": "Sec Upload Proj"}, headers=auth_headers)
+    project_id = res_proj.json()["project_id"]
+    res_repo = sync_client.post(f"/api/projects/{project_id}/repositories", json={"name": "Sec Upload Repo", "source_path": "/x"}, headers=auth_headers)
+    repo_id = res_repo.json()["repository_id"]
+    
+    b64_bad = base64.b64encode(b"bad").decode("utf-8")
+    
+    # 7. Path traversal
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/upload", json={"files": [{"path": "../passwd", "content": b64_bad}]}, headers=auth_headers)
+    assert res.status_code == 400
+        
+    # 8. Absolute path
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/upload", json={"files": [{"path": "/etc/passwd", "content": b64_bad}]}, headers=auth_headers)
+    assert res.status_code == 400
+        
+    # 9. Windows path
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/upload", json={"files": [{"path": "C:/Windows", "content": b64_bad}]}, headers=auth_headers)
+    assert res.status_code == 400
+
+    # 10. Null bytes
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/upload", json={"files": [{"path": "test\0.py", "content": b64_bad}]}, headers=auth_headers)
+    assert res.status_code == 400
+
+def test_sync_upload_auth(sync_client, auth_headers):
+    # 1, 2, 3
+    res_proj = sync_client.post("/api/projects", json={"name": "Auth Proj"}, headers=auth_headers)
+    project_id = res_proj.json()["project_id"]
+    res_repo = sync_client.post(f"/api/projects/{project_id}/repositories", json={"name": "Auth Repo", "source_path": "/x"}, headers=auth_headers)
+    repo_id = res_repo.json()["repository_id"]
+    
+    # Missing auth
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/upload", json={"files": []})
+    assert res.status_code in [401, 403]
+    
+    # Wrong owner
+    res_b = sync_client.post("/api/auth/register", json={"username": "userc", "email": "c@test.com", "password": "password"})
+    res_b = sync_client.post("/api/auth/login", json={"username": "userc", "password": "password"})
+    auth_b = {"Authorization": f"Bearer {res_b.json()['access_token']}"}
+    
+    res = sync_client.post(f"/api/projects/{project_id}/repositories/{repo_id}/sync/upload", json={"files": []}, headers=auth_b)
+    assert res.status_code == 403
