@@ -7,7 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.config import settings
 from backend.api import (
     auth_router, repos_router, chat_router, bugs_router,
-    patches_router, graph_router, analytics_router, docs_router, review_router
+    patches_router, graph_router, analytics_router, docs_router, review_router,
+    projects_router
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -37,6 +38,7 @@ app.include_router(graph_router, prefix=settings.API_PREFIX)
 app.include_router(analytics_router, prefix=settings.API_PREFIX)
 app.include_router(docs_router, prefix=settings.API_PREFIX)
 app.include_router(review_router, prefix=settings.API_PREFIX)
+app.include_router(projects_router, prefix=settings.API_PREFIX)
 
 
 @app.get("/")

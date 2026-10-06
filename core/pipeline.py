@@ -40,7 +40,9 @@ def ingest_repository(
     repo_path: str,
     embedder: BaseEmbedder,
     force_reindex: bool = False,
-    save_to_disk: bool = True
+    save_to_disk: bool = True,
+    db_path: str = None,
+    storage_dir: str = None
 ) -> IngestedRepository:
     """
     Ingests a repository directory with incremental re-indexing & disk caching support:
@@ -63,11 +65,15 @@ def ingest_repository(
 
     repo_id = get_repo_id(repo_path)
     backend_name = "ollama" if embedder.__class__.__name__ == "OllamaEmbedder" else "tfidf"
+    
+    from core.persistence import DEFAULT_DB_PATH
+    db_path = db_path or DEFAULT_DB_PATH
+    storage_dir = storage_dir or ".storage"
 
     if not force_reindex:
-        delta = detect_repository_changes(repo_path, source_files)
+        delta = detect_repository_changes(repo_path, source_files, db_path=db_path)
         if not delta.is_fresh_index:
-            cached_data = load_index(repo_path)
+            cached_data = load_index(repo_path, db_path=db_path, storage_dir=storage_dir)
             if cached_data is not None:
                 meta, cached_chunks, cached_store = cached_data
                 cached_backend = meta.get("backend")
@@ -157,7 +163,7 @@ def ingest_repository(
                     ast_chunks_count = sum(1 for c in all_chunks if c.kind in ("function", "class", "method", "interface", "enum", "type", "struct", "section"))
 
                     if save_to_disk:
-                        save_index(repo_path, backend_name, source_files, all_chunks, store)
+                        save_index(repo_path, backend_name, source_files, all_chunks, store, db_path=db_path, storage_dir=storage_dir)
 
                     lex_idx = BM25Index(all_chunks)
                     elapsed = time.perf_counter() - start_t
@@ -191,7 +197,7 @@ def ingest_repository(
     store.add(chunks, vectors)
 
     if save_to_disk:
-        save_index(repo_path, backend_name, source_files, chunks, store)
+        save_index(repo_path, backend_name, source_files, chunks, store, db_path=db_path, storage_dir=storage_dir)
 
     lex_idx = BM25Index(chunks)
     elapsed = time.perf_counter() - start_t

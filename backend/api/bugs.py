@@ -6,7 +6,7 @@ import time
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from backend.api.repos import get_repo_engine
+from backend.services.loader import load_project_repository
 from backend.bug_localizer import AdvancedBugLocalizer
 from backend.auth import User, get_current_user
 from backend.database import db_manager
@@ -16,13 +16,14 @@ router = APIRouter(prefix="/bugs", tags=["Bug Localization"])
 
 class BugReportRequest(BaseModel):
     repo_id: str
+    project_id: Optional[str] = None
     error_report: str
     top_k: int = 5
 
 
 @router.post("/localize")
 def localize_bug(req: BugReportRequest, current_user: User = Depends(get_current_user)):
-    repo_data = get_repo_engine(req.repo_id)
+    repo_data = load_project_repository(req.repo_id, current_user, req.project_id)
     store = repo_data["store"]
     embedder = repo_data["embedder"]
     graph = repo_data["graph"]

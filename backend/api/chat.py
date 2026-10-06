@@ -7,7 +7,7 @@ import time
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from backend.api.repos import get_repo_engine
+from backend.services.loader import load_project_repository
 from backend.services.assistant_engine import AssistantEngine
 from backend.auth import User, get_current_user
 from backend.database import db_manager
@@ -17,13 +17,14 @@ router = APIRouter(prefix="/chat", tags=["Repository Assistant"])
 
 class QueryRequest(BaseModel):
     repo_id: str
+    project_id: Optional[str] = None
     question: str
     top_k: int = 5
 
 
 @router.post("/ask")
 def ask_assistant(req: QueryRequest, current_user: User = Depends(get_current_user)):
-    repo_data = get_repo_engine(req.repo_id)
+    repo_data = load_project_repository(req.repo_id, current_user, req.project_id)
 
     assistant = AssistantEngine(
         store=repo_data["store"],
